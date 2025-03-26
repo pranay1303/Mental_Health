@@ -353,6 +353,7 @@ def preprocess_image(image_bytes):
         return None
 
 # 🔮 Function to get emotion prediction from Gemini API
+# 🔮 Function to get mental health prediction from Gemini API
 def get_gemini_emotion(audio_bytes):
     try:
         print("🔄 Sending audio data to Gemini API...")
@@ -360,13 +361,14 @@ def get_gemini_emotion(audio_bytes):
         # Convert audio bytes to Base64
         audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
 
-        # Prepare the request payload (explicitly marking as audio input)
+        # Prepare the request payload with explicit instruction for brevity
         request_payload = {
             "contents": [
                 {
                     "role": "user",
                     "parts": [
-                        {"inlineData": {"mimeType": "audio/wav", "data": audio_b64}}
+                        {"inlineData": {"mimeType": "audio/wav", "data": audio_b64}},
+                        {"text": "Analyze the mental health state in this audio and return only a 1-2 word label."}
                     ]
                 }
             ]
