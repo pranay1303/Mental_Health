@@ -5,7 +5,11 @@ numpy
 streamlit
 requests
 librosa
-pydub 
-requests 
-certifi 
+pydub
+certifi
 urllib3
+opencv-python
+base64
+pydantic
+Pillow
+matplotlib

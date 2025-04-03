@@ -273,6 +273,7 @@
 
 
 from fastapi import FastAPI, File, UploadFile
+from pydantic import BaseModel
 import tensorflow as tf
 import numpy as np
 import uvicorn
@@ -282,7 +283,7 @@ import cv2
 import base64
 from io import BytesIO
 
-# 🎯 Define constants
+# 🎯 Define Constants
 GEMINI_API_KEY = "AIzaSyDdifJhrztNdBYGKGWM1xDtQr3vP2GSTds"
 GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
 
@@ -290,13 +291,7 @@ app = FastAPI()
 
 # Define emotion labels
 emotion_labels = [
-    "Anxiety", 
-    "Depression", 
-    "Stress", 
-    "Well-being", 
-    "Resilience", 
-    "Burnout", 
-    "Mindfulness"
+    "Anxiety", "Depression", "Stress", "Well-being", "Resilience", "Burnout", "Mindfulness"
 ]
 
 # Load TensorFlow Models
@@ -307,19 +302,20 @@ try:
 except Exception as e:
     print(f"❌ Error Loading Models: {e}")
 
+# 📥 Request Model for Chatbot
+class ChatRequest(BaseModel):
+    user_message: str
+
 # 🎤 Function to preprocess audio
 def preprocess_audio(audio_bytes):
     try:
         print("🔄 Processing audio...")
         y, sr = librosa.load(BytesIO(audio_bytes), sr=22050)
-        y, _ = librosa.effects.trim(y)  # Trim silence
+        y, _ = librosa.effects.trim(y)
 
         # Ensure fixed length (7 sec)
         max_length = sr * 7
-        if len(y) < max_length:
-            y = np.pad(y, (0, max_length - len(y)))
-        else:
-            y = y[:max_length]
+        y = np.pad(y, (0, max_length - len(y))) if len(y) < max_length else y[:max_length]
 
         # Extract features (MFCC + RMS + ZCR)
         mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=40)
@@ -352,16 +348,11 @@ def preprocess_image(image_bytes):
         print(f"❌ Error in image preprocessing: {e}")
         return None
 
-# 🔮 Function to get emotion prediction from Gemini API
-# 🔮 Function to get mental health prediction from Gemini API
+# 🔮 Function to get emotion prediction from Gemini API for audio
 def get_gemini_emotion(audio_bytes):
     try:
         print("🔄 Sending audio data to Gemini API...")
-
-        # Convert audio bytes to Base64
         audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
-
-        # Prepare the request payload with explicit instruction for brevity
         request_payload = {
             "contents": [
                 {
@@ -373,11 +364,7 @@ def get_gemini_emotion(audio_bytes):
                 }
             ]
         }
-
-        # Send request to Gemini API
         response = requests.post(GEMINI_API_URL, json=request_payload)
-
-        # Check response
         if response.status_code == 200:
             response_data = response.json()
             emotion = response_data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "Unknown")
@@ -386,57 +373,119 @@ def get_gemini_emotion(audio_bytes):
         else:
             print(f"❌ Gemini API Error: {response.text}")
             return "Unknown"
-
     except Exception as e:
         print(f"❌ Gemini API Request Error: {e}")
         return "Unknown"
 
-# 🎤 API Endpoint for Audio Prediction
+# 🤖 Chatbot Function
+def get_gemini_chat_response(user_message):
+    try:
+        print(f"📩 Received chatbot message: {user_message}")
+        
+        request_payload = {"contents": [{"role": "user", "parts": [{"text": user_message}]}]}
+        response = requests.post(GEMINI_API_URL, json=request_payload)
+
+        if response.status_code == 200:
+            response_data = response.json()
+            chat_response = response_data.get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "Sorry, I couldn't understand that.")
+            print(f"✅ Gemini Chatbot Response: {chat_response}")
+            return chat_response
+        else:
+            print(f"❌ Gemini API Error: {response.text}")
+            return "Error fetching response"
+    except Exception as e:
+        print(f"❌ Chatbot API Request Error: {e}")
+        return "Error in chatbot processing"
+
+# 🚀 API Endpoints
 @app.post("/predict/audio/")
 async def predict_audio(file: UploadFile = File(...)):
     try:
         audio_bytes = await file.read()
-
-        # 1️⃣ Predict using ML Model
         processed_audio = preprocess_audio(audio_bytes)
         if processed_audio is None:
             return {"error": "Audio processing failed"}
 
         model_prediction = audio_model.predict(processed_audio)
+        confidence = float(np.max(model_prediction)) * 100
         model_emotion = emotion_labels[np.argmax(model_prediction)]
 
-        # 2️⃣ Predict using Gemini API
         gemini_emotion = get_gemini_emotion(audio_bytes)
 
-        # 3️⃣ Combine Results
-        if model_emotion.lower() == gemini_emotion.lower():
-            final_emotion = model_emotion
-        else:
-            final_emotion = f"Model: {model_emotion}, Gemini: {gemini_emotion}"
-
-        return {"emotion": final_emotion}
+        final_emotion = model_emotion if model_emotion.lower() == gemini_emotion.lower() else f"Model: {model_emotion}, Gemini: {gemini_emotion}"
+        
+        return {"emotion": final_emotion, "confidence": confidence}
     except Exception as e:
         return {"error": str(e)}
 
-# 🖼️ API Endpoint for Image Prediction
 @app.post("/predict/image/")
 async def predict_image(file: UploadFile = File(...)):
     try:
         image_bytes = await file.read()
-
-        # Process image
         processed_image = preprocess_image(image_bytes)
         if processed_image is None:
             return {"error": "Image processing failed"}
 
-        print("🔄 Making prediction...")
         prediction = image_model.predict(processed_image)
+        confidence = float(np.max(prediction)) * 100
         predicted_label = emotion_labels[np.argmax(prediction)]
 
-        return {"emotion": predicted_label}
+        return {"emotion": predicted_label, "confidence": confidence}
     except Exception as e:
         return {"error": str(e)}
 
-# 🚀 Run FastAPI server
+@app.post("/chatbot/")
+async def chatbot_endpoint(chat_request: ChatRequest):
+    print("🔄 Processing chatbot request...")
+    response = get_gemini_chat_response(chat_request.user_message)
+    return {"response": response}
+
+mood_history = []
+
+class MoodRequest(BaseModel):
+    mood: str
+
+@app.post("/track_mood/")
+async def track_mood(mood_request: MoodRequest):
+    mood_history.append(mood_request.mood)
+    print(f"✅ Mood Tracked: {mood_request.mood}")
+    return {"status": "success", "mood": mood_request.mood}
+
+@app.get("/get_mood_history/")
+async def get_mood_history():
+    return {"mood_history": mood_history}
+
+@app.get("/mood_suggestions/")
+async def mood_suggestions():
+    if not mood_history:
+        return {"suggestions": "No mood data available."}
+
+    latest_mood = mood_history[-1]
+    request_payload = {
+        "contents": [{"role": "user", "parts": [{"text": f"Suggest mental health advice for someone feeling {latest_mood}."}]}]
+    }
+    response = requests.post(GEMINI_API_URL, json=request_payload)
+    
+    if response.status_code == 200:
+        suggestion = response.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "No suggestions available.")
+        return {"suggestions": suggestion}
+    else:
+        return {"suggestions": "Error fetching suggestions"}
+
+@app.get("/mental_health_tips/")
+async def get_tips():
+    response = requests.post(GEMINI_API_URL, json={"contents": [{"role": "user", "parts": [{"text": "Give me a mental health tip."}]}]})
+    return {"tips": response.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "No tips available.")}
+
+
+@app.get("/relaxation_suggestions/")
+async def relaxation_suggestions():
+    response = requests.post(GEMINI_API_URL, json={"contents": [{"role": "user", "parts": [{"text": "Give me relaxation suggestions."}]}]})
+    return {"suggestions": response.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "No suggestions available.")}
+
+
 if __name__ == "__main__":
+    print("🚀 Starting FastAPI Server...")
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
